@@ -21,9 +21,9 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Scheduler tự động crawl kết quả xổ số 3 miền:
- * - Miền Nam: 16h30–18h00 (cứ 5 phút)
- * - Miền Trung: 17h15–18h30 (cứ 5 phút)
- * - Miền Bắc: 18h10–19h00 (cứ 5 phút)
+ * - Miền Nam: 16:15 – 16:40 (cứ 5 phút)
+ * - Miền Trung: 17:15 – 17:40 (cứ 5 phút)
+ * - Miền Bắc: 18:15 – 18:40 (cứ 5 phút)
  */
 @Slf4j
 @Service
@@ -46,25 +46,25 @@ public class CrawlScheduler {
   private final Map<String, Map<String, Map<String, List<String>>>> lastFetchedData = new HashMap<>();
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // MIỀN NAM: Quay lúc 16h30 (giờ Việt Nam) → crawl 16h–18h mỗi 5 phút
+  // MIỀN NAM: Quay lúc 16:10 - 16:30 → crawl 16:15–16:40 mỗi 5 phút
   // ─────────────────────────────────────────────────────────────────────────────
-  @Scheduled(cron = "0 */5 16-17 * * *", zone = "Asia/Ho_Chi_Minh")
+  @Scheduled(cron = "0 15,20,25,30,35,40 16 * * *", zone = "Asia/Ho_Chi_Minh")
   public void crawlMienNam() {
     crawlRegion("MN", urlMienNam);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // MIỀN TRUNG: Quay lúc 17h15 → crawl 17h–18h30 mỗi 5 phút
+  // MIỀN TRUNG: Quay lúc 17:10 - 17:30 → crawl 17:15–17:40 mỗi 5 phút
   // ─────────────────────────────────────────────────────────────────────────────
-  @Scheduled(cron = "0 */5 17-18 * * *", zone = "Asia/Ho_Chi_Minh")
+  @Scheduled(cron = "0 15,20,25,30,35,40 17 * * *", zone = "Asia/Ho_Chi_Minh")
   public void crawlMienTrung() {
     crawlRegion("MT", urlMienTrung);
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // MIỀN BẮC: Quay lúc 18h10–18h30 → crawl 18h–19h mỗi 5 phút
+  // MIỀN BẮC: Quay lúc 18:10 - 18:30 → crawl 18:15–18:40 mỗi 5 phút
   // ─────────────────────────────────────────────────────────────────────────────
-  @Scheduled(cron = "0 */5 18-19 * * *", zone = "Asia/Ho_Chi_Minh")
+  @Scheduled(cron = "0 15,20,25,30,35,40 18 * * *", zone = "Asia/Ho_Chi_Minh")
   public void crawlMienBac() {
     crawlRegion("MB", urlMienBac);
   }
