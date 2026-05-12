@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  Alert,
+  Dimensions,
   FlatList,
   Modal,
   Platform,
@@ -13,109 +13,124 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { Dimensions } from 'react-native';
-import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import ConfettiCannon from 'react-native-confetti-cannon';
-import { checkTicketManually } from '../../services/imageAnalysisService';
-
-const { width: SCREEN_W } = Dimensions.get('window');
+import Toast from 'react-native-toast-message';
+import { useForm, Controller } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
+import { checkTicketManually, PrizeResult } from '../../services/imageAnalysisService';
 import { formatPrizeAmount } from '../../services/ticketHistoryService';
 import { Brand, PrizeColors } from '../../constants/theme';
+import { Region, PROVINCES, REGION_LABELS } from '../../constants/data';
+import { RegionSelector } from '../../components/ui/RegionSelector';
+import { DatePickerButton } from '../../components/ui/DatePickerButton';
+
+const { width: SCREEN_W } = Dimensions.get('window');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Data
+// Validation Schema
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Region = 'MN' | 'MT' | 'MB';
+const formSchema = z.object({
+  region: z.enum(['MN', 'MT', 'MB']),
+  ticketNumber: z.string().min(1, 'Vui lòng nhập số vé'),
+  drawDate: z.string().min(1, 'Vui lòng chọn ngày xổ số'),
+  provinceName: z.string().min(1, 'Vui lòng chọn đài xổ số'),
+}).superRefine((data, ctx) => {
+  const digits = data.region === 'MB' ? 5 : 6;
+  if (data.ticketNumber.length !== digits || !/^\d+$/.test(data.ticketNumber)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Vé ${REGION_LABELS[data.region].split(' ').pop()} cần ${digits} chữ số hợp lệ`,
+      path: ['ticketNumber'],
+    });
+  }
+});
 
-const REGION_LABELS: Record<Region, string> = {
-  MN: '🌴 Miền Nam',
-  MT: '🏖️ Miền Trung',
-  MB: '❄️ Miền Bắc',
-};
-
-const PROVINCES: Record<Region, string[]> = {
-  MN: [
-    'Hồ Chí Minh', 'Đồng Tháp', 'Cà Mau', 'Bến Tre', 'Vũng Tàu',
-    'Bạc Liêu', 'Đồng Nai', 'Cần Thơ', 'Sóc Trăng', 'Tây Ninh',
-    'An Giang', 'Bình Thuận', 'Vĩnh Long', 'Bình Dương', 'Trà Vinh',
-    'Long An', 'Bình Phước', 'Hậu Giang', 'Tiền Giang', 'Kiên Giang', 'Đà Lạt',
-  ],
-  MT: [
-    'Đà Nẵng', 'Quảng Nam', 'Quảng Ngãi', 'Bình Định', 'Phú Yên',
-    'Khánh Hòa', 'Kon Tum', 'Gia Lai', 'Đắk Lắk', 'Đắk Nông',
-    'Quảng Bình', 'Quảng Trị', 'Thừa Thiên Huế', 'Ninh Thuận',
-  ],
-  MB: [
-    'Hà Nội', 'Hải Phòng', 'Quảng Ninh', 'Bắc Ninh', 'Bắc Giang',
-    'Hải Dương', 'Hưng Yên', 'Vĩnh Phúc', 'Hà Nam', 'Nam Định',
-    'Thái Bình', 'Ninh Bình', 'Thái Nguyên', 'Tuyên Quang', 'Lào Cai',
-    'Yên Bái', 'Phú Thọ', 'Điện Biên', 'Hòa Bình', 'Sơn La',
-  ],
-};
+type FormData = z.infer<typeof formSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function ManualCheckScreen() {
-  const [region, setRegion] = useState<Region>('MN');
-  const [ticketNumber, setTicketNumber] = useState('');
-  const [drawDate, setDrawDate] = useState('');
-  const [provinceName, setProvinceName] = useState('');
+  const { control, handleSubmit: formSubmit, watch, setValue, formState: { errors } } = useForm<FormData>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      region: 'MN',
+      ticketNumber: '',
+      drawDate: '',
+      provinceName: '',
+    },
+  });
+
+  const region = watch('region');
+  const drawDate = watch('drawDate');
+  const provinceName = watch('provinceName');
+
   const [modalVisible, setModalVisible] = useState(false);
+  const [iosDatePickerVisible, setIosDatePickerVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [prizes, setPrizes] = useState<any[] | null>(null);
+  const [prizes, setPrizes] = useState<PrizeResult[] | null>(null);
 
   const provinces = PROVINCES[region];
 
   const showDatePicker = () => {
-    DateTimePickerAndroid.open({
-      value: drawDate ? new Date(drawDate) : new Date(),
-      onChange: (event, selectedDate) => {
-        if (event.type === 'set' && selectedDate) {
-          const d = selectedDate.toISOString().split('T')[0];
-          setDrawDate(d);
-        }
-      },
-      mode: 'date',
-    });
+    if (Platform.OS === 'android') {
+      DateTimePickerAndroid.open({
+        value: drawDate ? new Date(drawDate) : new Date(),
+        onChange: (event, selectedDate) => {
+          if (event.type === 'set' && selectedDate) {
+            const d = selectedDate.toISOString().split('T')[0];
+            setValue('drawDate', d, { shouldValidate: true });
+          }
+        },
+        mode: 'date',
+      });
+    } else {
+      setIosDatePickerVisible(true);
+    }
   };
 
   const handleRegionChange = (r: Region) => {
-    setRegion(r);
-    setProvinceName('');
+    setValue('region', r);
+    setValue('provinceName', ''); // Reset province when region changes
+    setValue('ticketNumber', ''); // Reset ticket number to avoid validation mismatch
   };
 
-  const handleSubmit = async () => {
-    if (!ticketNumber || !drawDate || !provinceName) {
-      Alert.alert('Thiếu thông tin', 'Vui lòng nhập đầy đủ: Số vé, Ngày và Đài xổ số.');
-      return;
-    }
-    const digits = region === 'MB' ? 5 : 6;
-    if (ticketNumber.length !== digits || !/^\d+$/.test(ticketNumber)) {
-      Alert.alert('Số vé không hợp lệ', `Vé ${REGION_LABELS[region].split(' ').pop()} cần ${digits} chữ số.`);
-      return;
-    }
-
+  const onSubmit = async (data: FormData) => {
     setLoading(true);
     setPrizes(null);
     try {
-      const data = await checkTicketManually({
-        so_ve: ticketNumber,
-        ngay_xo_so: drawDate,
-        dai_xo_so: provinceName,
+      const responseData = await checkTicketManually({
+        so_ve: data.ticketNumber,
+        ngay_xo_so: data.drawDate,
+        dai_xo_so: data.provinceName,
       });
-      setPrizes(data);
+      // Cast the generic BackendCheckResponse to PrizeResult for consistency
+      setPrizes(responseData as any as PrizeResult[]);
     } catch (error: any) {
-      Alert.alert('Lỗi', error.response?.data?.message || error.message || 'Không thể kết nối backend');
+      const msg = error.response?.data?.message || error.message || 'Không thể kết nối backend';
+      Toast.show({ type: 'error', text1: 'Lỗi dò vé', text2: msg });
     } finally {
       setLoading(false);
     }
   };
 
+  const onError = () => {
+    const errorMessages = Object.values(errors).map(e => e?.message).filter(Boolean);
+    if (errorMessages.length > 0) {
+      Toast.show({
+        type: 'error',
+        text1: 'Lỗi thông tin',
+        text2: errorMessages[0] as string,
+      });
+    }
+  };
+
   const hasWon = prizes && prizes.length > 0;
-  const totalPrize = (prizes ?? []).reduce((s: number, p: any) => s + (p.prizeAmount ?? 0), 0);
+  const totalPrize = (prizes ?? []).reduce((s: number, p: PrizeResult) => s + (p.prizeAmount ?? 0), 0);
 
   return (
     <View style={{ flex: 1 }}>
@@ -131,19 +146,7 @@ export default function ManualCheckScreen() {
       {/* Region Selector */}
       <View style={s.section}>
         <Text style={s.label}>Chọn miền</Text>
-        <View style={s.regionRow}>
-          {(Object.keys(REGION_LABELS) as Region[]).map((r) => (
-            <TouchableOpacity
-              key={r}
-              style={[s.regionChip, region === r && s.regionChipActive]}
-              onPress={() => handleRegionChange(r)}
-            >
-              <Text style={[s.regionChipText, region === r && s.regionChipTextActive]}>
-                {REGION_LABELS[r]}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <RegionSelector region={region} onRegionChange={handleRegionChange} />
       </View>
 
       {/* Ticket Number */}
@@ -151,43 +154,52 @@ export default function ManualCheckScreen() {
         <Text style={s.label}>
           Số Vé ({region === 'MB' ? '5 số' : '6 số'})
         </Text>
-        <TextInput
-          style={s.input}
-          placeholder={region === 'MB' ? 'Nhập 5 số...' : 'Nhập 6 số...'}
-          placeholderTextColor="#555"
-          value={ticketNumber}
-          keyboardType="numeric"
-          maxLength={region === 'MB' ? 5 : 6}
-          onChangeText={setTicketNumber}
+        <Controller
+          control={control}
+          name="ticketNumber"
+          render={({ field: { onChange, value } }) => (
+            <TextInput
+              style={[s.input, errors.ticketNumber && s.inputError]}
+              placeholder={region === 'MB' ? 'Nhập 5 số...' : 'Nhập 6 số...'}
+              placeholderTextColor="#555"
+              value={value}
+              keyboardType="numeric"
+              maxLength={region === 'MB' ? 5 : 6}
+              onChangeText={onChange}
+            />
+          )}
         />
+        {errors.ticketNumber && <Text style={s.errorText}>{errors.ticketNumber.message}</Text>}
       </View>
 
       {/* Draw Date */}
       <View style={s.section}>
         <Text style={s.label}>Ngày Xổ Số</Text>
-        <Pressable style={s.datePicker} onPress={showDatePicker}>
-          <Text style={[s.datePickerText, !drawDate && s.placeholder]}>
-            {drawDate || 'Chọn ngày xổ số...'}
-          </Text>
-          <Text style={s.datePickerIcon}>📅</Text>
-        </Pressable>
+        <DatePickerButton
+          value={drawDate}
+          placeholder="Chọn ngày xổ số..."
+          icon="📅"
+          onPress={showDatePicker}
+        />
+        {errors.drawDate && <Text style={s.errorText}>{errors.drawDate.message}</Text>}
       </View>
 
       {/* Province Selector */}
       <View style={s.section}>
         <Text style={s.label}>Đài Xổ Số</Text>
-        <Pressable style={s.datePicker} onPress={() => setModalVisible(true)}>
-          <Text style={[s.datePickerText, !provinceName && s.placeholder]}>
-            {provinceName || 'Chọn đài xổ số...'}
-          </Text>
-          <Text style={s.datePickerIcon}>🏛️</Text>
-        </Pressable>
+        <DatePickerButton
+          value={provinceName}
+          placeholder="Chọn đài xổ số..."
+          icon="🏛️"
+          onPress={() => setModalVisible(true)}
+        />
+        {errors.provinceName && <Text style={s.errorText}>{errors.provinceName.message}</Text>}
       </View>
 
       {/* Submit Button */}
       <TouchableOpacity
         style={[s.submitBtn, loading && s.disabled]}
-        onPress={handleSubmit}
+        onPress={formSubmit(onSubmit, onError)}
         disabled={loading}
       >
         <Text style={s.submitBtnText}>
@@ -203,7 +215,7 @@ export default function ManualCheckScreen() {
               <Text style={s.resultEmoji}>🎉</Text>
               <Text style={s.resultTitle}>CHÚC MỪNG!</Text>
               <Text style={s.resultSub}>Tổng thưởng: {formatPrizeAmount(totalPrize)}</Text>
-              {prizes.map((prize: any, idx: number) => (
+              {prizes.map((prize: PrizeResult, idx: number) => (
                 <View key={idx} style={[s.prizeItem, { borderLeftColor: PrizeColors[prize.prizeLevel] ?? Brand.neon }]}>
                   <Text style={[s.prizeLabel, { color: PrizeColors[prize.prizeLevel] ?? Brand.neon }]}>
                     {prize.prizeLevel}
@@ -216,7 +228,7 @@ export default function ManualCheckScreen() {
             <>
               <Text style={s.resultEmoji}>😔</Text>
               <Text style={s.resultTitle}>KHÔNG TRÚNG</Text>
-              <Text style={s.resultSub}>Vé <Text style={{ color: Brand.gold, fontWeight: '800' }}>{ticketNumber}</Text> chưa trúng lần này</Text>
+              <Text style={s.resultSub}>Vé <Text style={{ color: Brand.gold, fontWeight: '800' }}>{watch('ticketNumber')}</Text> chưa trúng lần này</Text>
             </>
           )}
         </View>
@@ -243,7 +255,10 @@ export default function ManualCheckScreen() {
               renderItem={({ item }) => (
                 <Pressable
                   style={({ pressed }) => [s.provinceItem, pressed && s.provinceItemPressed]}
-                  onPress={() => { setProvinceName(item); setModalVisible(false); }}
+                  onPress={() => { 
+                    setValue('provinceName', item, { shouldValidate: true }); 
+                    setModalVisible(false); 
+                  }}
                 >
                   <Text style={s.provinceItemText}>{item}</Text>
                   {item === provinceName && <Text style={s.provinceCheck}>✓</Text>}
@@ -253,6 +268,41 @@ export default function ManualCheckScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* iOS Date Picker Modal */}
+      {Platform.OS !== 'android' && (
+        <Modal
+          visible={iosDatePickerVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setIosDatePickerVisible(false)}
+        >
+          <View style={s.modalOverlay}>
+            <View style={s.modalBox}>
+              <View style={s.modalHeader}>
+                <Text style={s.modalTitle}>📅 Chọn Ngày Xổ Số</Text>
+                <TouchableOpacity onPress={() => setIosDatePickerVisible(false)}>
+                  <Text style={s.modalClose}>Xong</Text>
+                </TouchableOpacity>
+              </View>
+              <DateTimePicker
+                value={drawDate ? new Date(drawDate) : new Date()}
+                mode="date"
+                display="spinner"
+                themeVariant="dark"
+                onChange={(event, selectedDate) => {
+                  if (event.type === 'set' && selectedDate) {
+                    const d = selectedDate.toISOString().split('T')[0];
+                    setValue('drawDate', d, { shouldValidate: true });
+                  }
+                  setIosDatePickerVisible(false);
+                }}
+                style={{ backgroundColor: Brand.darkCard }}
+              />
+            </View>
+          </View>
+        </Modal>
+      )}
       </ScrollView>
 
       {/* Confetti */}
@@ -312,31 +362,6 @@ const s = StyleSheet.create({
     marginBottom: 8,
     textTransform: 'uppercase',
   },
-  regionRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  regionChip: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: Brand.darkCard,
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: Brand.darkCard2,
-  },
-  regionChipActive: {
-    backgroundColor: Brand.primary,
-    borderColor: Brand.primaryLight,
-  },
-  regionChipText: {
-    color: '#888',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  regionChipTextActive: {
-    color: '#FFF',
-  },
   input: {
     backgroundColor: Brand.darkCard,
     borderRadius: 12,
@@ -349,27 +374,14 @@ const s = StyleSheet.create({
     padding: 16,
     textAlign: 'center',
   },
-  datePicker: {
-    backgroundColor: Brand.darkCard,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: Brand.darkCard2,
-    padding: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  inputError: {
+    borderColor: Brand.danger,
   },
-  datePickerText: {
-    color: '#FFF',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  placeholder: {
-    color: '#555',
-    fontWeight: '400',
-  },
-  datePickerIcon: {
-    fontSize: 20,
+  errorText: {
+    color: Brand.danger,
+    fontSize: 12,
+    marginTop: 6,
+    marginLeft: 4,
   },
   submitBtn: {
     margin: 20,
